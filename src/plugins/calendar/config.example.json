@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "refreshRateMinutes": 1,
+
+  "config": {
+    "googleCalendar": {
+      "serviceAccountKeyPath": "/path/to/your/service-account-key.json",
+      "calendarIds": [
+        "your.calendar@gmail.com",
+        "your.other.calendar@gmail.com"
+      ]
+    },
+    "timezone": "Europe/Paris",
+    "startDay": "monday",
+    "showTimeSlots": false,
+    "maxEventsPerDay": 5,
+    "dateFormat": "MMM D"
+  }
+}

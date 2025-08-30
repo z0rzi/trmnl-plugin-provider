@@ -1,0 +1,9 @@
+version: "3.0"
+
+services:
+  trmnl-plugin-provider:
+    build: .
+    container_name: trmnl-plugin-provider
+    restart: always
+    volumes:
+      - ./dbs:/app/dbs
