@@ -1,6 +1,6 @@
-import { google, calendar_v3 } from 'googleapis';
-import fs from 'fs';
-import path from 'path';
+import { google, calendar_v3 } from "googleapis";
+import fs from "fs";
+import path from "path";
 
 export interface CalendarEvent {
   id: string;
@@ -23,8 +23,7 @@ export interface CalendarEvent {
 
 export interface GoogleCalendarConfig {
   serviceAccountKeyPath: string;
-  calendarId?: string;
-  calendarIds?: string[]; // Support for multiple calendars
+  calendarIds: string[];
 }
 
 /**
@@ -38,12 +37,12 @@ export class GoogleCalendarService {
 
   constructor(config: GoogleCalendarConfig) {
     if (!GoogleCalendarService.isValidConfig(config)) {
-      throw new Error('Invalid Google Calendar configuration');
+      throw new Error("Invalid Google Calendar configuration");
     }
 
     this.config = config;
     // Support both single calendar and multiple calendars
-    this.calendarIds = config.calendarIds || [config.calendarId || 'primary'];
+    this.calendarIds = config.calendarIds;
   }
 
   /**
@@ -52,23 +51,25 @@ export class GoogleCalendarService {
   async initialize(): Promise<void> {
     try {
       let serviceAccountKeyPath = this.config.serviceAccountKeyPath;
-      if (serviceAccountKeyPath.startsWith('./')) {
+      if (serviceAccountKeyPath.startsWith("./")) {
         // It's a relative path, we resolve it
         serviceAccountKeyPath = path.resolve(__dirname, serviceAccountKeyPath);
       }
-      const serviceAccountConfig = await this.loadServiceAccountConfig(serviceAccountKeyPath);
-      
+      const serviceAccountConfig = await this.loadServiceAccountConfig(
+        serviceAccountKeyPath,
+      );
+
       // Initialize service account authentication
       this.auth = new google.auth.GoogleAuth({
         credentials: serviceAccountConfig,
         scopes: [
-          'https://www.googleapis.com/auth/calendar.readonly',
-          'https://www.googleapis.com/auth/calendar.events.readonly'
-        ]
+          "https://www.googleapis.com/auth/calendar.readonly",
+          "https://www.googleapis.com/auth/calendar.events.readonly",
+        ],
       });
 
       // Initialize Calendar API client
-      this.calendar = google.calendar({ version: 'v3', auth: this.auth });
+      this.calendar = google.calendar({ version: "v3", auth: this.auth });
     } catch (error) {
       throw new Error(`Failed to initialize service account: ${error}`);
     }
@@ -78,14 +79,17 @@ export class GoogleCalendarService {
    * Load service account configuration from file
    */
   private async loadServiceAccountConfig(configKeyPath?: string): Promise<any> {
-    const keyPath = configKeyPath || 
-                   process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || 
-                   '/path/to/service-account-key.json';
+    const keyPath =
+      configKeyPath ||
+      process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH ||
+      "/path/to/service-account-key.json";
     try {
-      const keyFile = fs.readFileSync(keyPath, 'utf8');
+      const keyFile = fs.readFileSync(keyPath, "utf8");
       return JSON.parse(keyFile);
     } catch (error) {
-      throw new Error(`Failed to load service account key from ${keyPath}: ${error}`);
+      throw new Error(
+        `Failed to load service account key from ${keyPath}: ${error}`,
+      );
     }
   }
 
@@ -94,10 +98,12 @@ export class GoogleCalendarService {
    * @param config - Configuration to validate
    * @returns True if configuration is valid
    */
-  static isValidConfig(config: Partial<GoogleCalendarConfig>): config is GoogleCalendarConfig {
+  static isValidConfig(
+    config: Partial<GoogleCalendarConfig>,
+  ): config is GoogleCalendarConfig {
     return !!(
       config &&
-      typeof config.serviceAccountKeyPath === 'string' &&
+      typeof config.serviceAccountKeyPath === "string" &&
       config.serviceAccountKeyPath.length > 0
     );
   }
@@ -112,15 +118,15 @@ export class GoogleCalendarService {
   async getWeekEvents(
     startDate: Date,
     endDate: Date,
-    maxResults: number = 50
+    maxResults: number = 50,
   ): Promise<CalendarEvent[]> {
     if (!this.calendar) {
-      throw new Error('Google Calendar API client not initialized');
+      throw new Error("Google Calendar API client not initialized");
     }
 
     try {
       const allEvents: CalendarEvent[] = [];
-      
+
       // Fetch events from all configured calendars
       for (const calendarId of this.calendarIds) {
         try {
@@ -129,23 +135,28 @@ export class GoogleCalendarService {
             timeMin: startDate.toISOString(),
             timeMax: endDate.toISOString(),
             singleEvents: true,
-            orderBy: 'startTime',
-            maxResults
+            orderBy: "startTime",
+            maxResults,
           });
 
           const items = response.data.items || [];
-          const events = items.map(event => this.transformEvent(event, calendarId));
+          const events = items.map((event) =>
+            this.transformEvent(event, calendarId),
+          );
           allEvents.push(...events);
         } catch (error) {
-          console.warn(`Failed to fetch events from calendar ${calendarId}:`, error);
+          console.warn(
+            `Failed to fetch events from calendar ${calendarId}:`,
+            error,
+          );
           // Continue with other calendars even if one fails
         }
       }
 
       // Sort all events by start time
       const sortedEvents = allEvents.sort((a, b) => {
-        const aTime = a.start.dateTime || a.start.date || '';
-        const bTime = b.start.dateTime || b.start.date || '';
+        const aTime = a.start.dateTime || a.start.date || "";
+        const bTime = b.start.dateTime || b.start.date || "";
         return aTime.localeCompare(bTime);
       });
 
@@ -161,23 +172,26 @@ export class GoogleCalendarService {
    * @param calendarId - ID of the calendar this event belongs to
    * @returns Transformed CalendarEvent
    */
-  private transformEvent(event: calendar_v3.Schema$Event, calendarId?: string): CalendarEvent {
+  private transformEvent(
+    event: calendar_v3.Schema$Event,
+    calendarId?: string,
+  ): CalendarEvent {
     const calendarEvent: CalendarEvent = {
-      id: event.id || '',
-      summary: event.summary || 'Untitled Event',
+      id: event.id || "",
+      summary: event.summary || "Untitled Event",
       description: event.description || undefined,
       location: event.location || undefined,
       calendarId: calendarId,
       start: {
         dateTime: event.start?.dateTime || undefined,
         date: event.start?.date || undefined,
-        timeZone: event.start?.timeZone || undefined
+        timeZone: event.start?.timeZone || undefined,
       },
       end: {
         dateTime: event.end?.dateTime || undefined,
         date: event.end?.date || undefined,
-        timeZone: event.end?.timeZone || undefined
-      }
+        timeZone: event.end?.timeZone || undefined,
+      },
     };
 
     // Determine if it's an all-day event
@@ -192,18 +206,18 @@ export class GoogleCalendarService {
    */
   async testConnection(): Promise<boolean> {
     if (!this.calendar) {
-      throw new Error('Google Calendar API client not initialized');
+      throw new Error("Google Calendar API client not initialized");
     }
 
     try {
       // Test connection by trying to access the first configured calendar
       const testCalendarId = this.calendarIds[0];
       await this.calendar.calendars.get({
-        calendarId: testCalendarId
+        calendarId: testCalendarId,
       });
       return true;
     } catch (error) {
-      console.error('Google Calendar connection test failed:', error);
+      console.error("Google Calendar connection test failed:", error);
       return false;
     }
   }
@@ -212,34 +226,36 @@ export class GoogleCalendarService {
    * Get information for all configured calendars
    * @returns Promise resolving to array of calendar metadata
    */
-  async getCalendarsInfo(): Promise<Array<{
-    id: string;
-    summary: string;
-    timeZone?: string;
-  }>> {
+  async getCalendarsInfo(): Promise<
+    Array<{
+      id: string;
+      summary: string;
+      timeZone?: string;
+    }>
+  > {
     if (!this.calendar) {
-      throw new Error('Google Calendar API client not initialized');
+      throw new Error("Google Calendar API client not initialized");
     }
 
     try {
       const calendarsInfo = [];
-      
+
       for (const calendarId of this.calendarIds) {
         try {
           const response = await this.calendar.calendars.get({
-            calendarId: calendarId
+            calendarId: calendarId,
           });
 
           calendarsInfo.push({
-            id: response.data.id || '',
-            summary: response.data.summary || '',
-            timeZone: response.data.timeZone || undefined
+            id: response.data.id || "",
+            summary: response.data.summary || "",
+            timeZone: response.data.timeZone || undefined,
           });
         } catch (error) {
           console.warn(`Failed to get info for calendar ${calendarId}:`, error);
         }
       }
-      
+
       return calendarsInfo;
     } catch (error) {
       throw new Error(`Failed to get calendars info: ${error}`);

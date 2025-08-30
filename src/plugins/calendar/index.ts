@@ -18,9 +18,6 @@ interface CalendarConfig {
   };
   timezone?: string;
   startDay?: "monday" | "sunday";
-  showTimeSlots?: boolean;
-  maxEventsPerDay?: number;
-  dateFormat?: string;
 }
 
 /**

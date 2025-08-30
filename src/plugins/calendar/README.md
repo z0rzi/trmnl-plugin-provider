@@ -66,7 +66,6 @@ Update the `config.json` file in the calendar plugin directory:
   "config": {
     "googleCalendar": {
       "serviceAccountKeyPath": "/path/to/your/service-account-key.json",
-      "calendarId": "primary",
       "calendarIds": [
         "primary",
         "shared-calendar@example.com",
@@ -74,10 +73,7 @@ Update the `config.json` file in the calendar plugin directory:
       ]
     },
     "timezone": "America/New_York",
-    "startDay": "monday",
-    "showTimeSlots": false,
-    "maxEventsPerDay": 5,
-    "dateFormat": "MMM D"
+    "startDay": "monday"
   }
 }
 ```
@@ -92,13 +88,9 @@ export GOOGLE_SERVICE_ACCOUNT_KEY_PATH="/path/to/your/service-account-key.json"
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `googleCalendar.serviceAccountKeyPath` | string | **Required** | Path to your service account JSON key file |
-| `googleCalendar.calendarId` | string | `"primary"` | Single calendar ID (used if `calendarIds` not specified) |
 | `googleCalendar.calendarIds` | string[] | `["primary"]` | Array of calendar IDs to fetch events from |
 | `timezone` | string | `"UTC"` | Timezone for displaying events |
 | `startDay` | string | `"monday"` | First day of week (`"monday"` or `"sunday"`) |
-| `showTimeSlots` | boolean | `false` | Whether to show time slots (future feature) |
-| `maxEventsPerDay` | number | `5` | Maximum events to display per day |
-| `dateFormat` | string | `"MMM D"` | Date format for display |
 
 ### Calendar ID Types
 

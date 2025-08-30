@@ -11,9 +11,6 @@
       ]
     },
     "timezone": "Europe/Paris",
-    "startDay": "monday",
-    "showTimeSlots": false,
-    "maxEventsPerDay": 5,
-    "dateFormat": "MMM D"
+    "startDay": "monday"
   }
 }
