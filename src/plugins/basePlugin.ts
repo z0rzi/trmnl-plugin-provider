@@ -1,5 +1,6 @@
 import { Canvas, createCanvas, GlobalFonts } from "@napi-rs/canvas";
 import { Device } from "../terminus";
+import { DateTime } from "luxon";
 import path from 'path';
 
 GlobalFonts.registerFromPath(
@@ -156,7 +157,7 @@ export abstract class BasePlugin<TConfig = any> {
    * @returns Formatted screen name
    */
   generateScreenName(): string {
-    const timestamp = Date.now();
+    const timestamp = DateTime.now().toFormat("yyyyMMdd-HHmmss");
     return `${this.pluginName}_${this.deviceInfo.friendly_id}_${timestamp}`;
   }
 

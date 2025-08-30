@@ -1,6 +1,7 @@
 import { google, calendar_v3 } from "googleapis";
 import fs from "fs";
 import path from "path";
+import { DateTime } from "luxon";
 
 export interface CalendarEvent {
   id: string;
@@ -8,16 +9,8 @@ export interface CalendarEvent {
   description?: string;
   location?: string;
   calendarId?: string; // Track which calendar this event comes from
-  start: {
-    dateTime?: string;
-    date?: string;
-    timeZone?: string;
-  };
-  end: {
-    dateTime?: string;
-    date?: string;
-    timeZone?: string;
-  };
+  start: DateTime;
+  end: DateTime;
   allDay?: boolean;
 }
 
@@ -116,12 +109,18 @@ export class GoogleCalendarService {
    * @returns Promise resolving to array of calendar events
    */
   async getWeekEvents(
-    startDate: Date,
-    endDate: Date,
+    startDate: DateTime,
+    endDate: DateTime,
     maxResults: number = 50,
   ): Promise<CalendarEvent[]> {
     if (!this.calendar) {
       throw new Error("Google Calendar API client not initialized");
+    }
+    const startStr = startDate.toISO();
+    const endStr = endDate.toISO();
+
+    if (!startStr || !endStr) {
+      throw new Error("Invalid start or end date");
     }
 
     try {
@@ -132,8 +131,8 @@ export class GoogleCalendarService {
         try {
           const response = await this.calendar.events.list({
             calendarId: calendarId,
-            timeMin: startDate.toISOString(),
-            timeMax: endDate.toISOString(),
+            timeMin: startStr,
+            timeMax: endStr,
             singleEvents: true,
             orderBy: "startTime",
             maxResults,
@@ -155,9 +154,7 @@ export class GoogleCalendarService {
 
       // Sort all events by start time
       const sortedEvents = allEvents.sort((a, b) => {
-        const aTime = a.start.dateTime || a.start.date || "";
-        const bTime = b.start.dateTime || b.start.date || "";
-        return aTime.localeCompare(bTime);
+        return +a - +b;
       });
 
       return sortedEvents;
@@ -176,26 +173,26 @@ export class GoogleCalendarService {
     event: calendar_v3.Schema$Event,
     calendarId?: string,
   ): CalendarEvent {
+    const startStr = event.start?.dateTime || event.start?.date;
+    const startTz = event.start?.timeZone;
+    const endStr = event.end?.dateTime || event.end?.date;
+    const endTz = event.end?.timeZone;
+
+    if (!startStr || !endStr) {
+      console.log('🐱', event);
+      throw new Error("Invalid event start or end date");
+    }
+
     const calendarEvent: CalendarEvent = {
       id: event.id || "",
       summary: event.summary || "Untitled Event",
       description: event.description || undefined,
       location: event.location || undefined,
       calendarId: calendarId,
-      start: {
-        dateTime: event.start?.dateTime || undefined,
-        date: event.start?.date || undefined,
-        timeZone: event.start?.timeZone || undefined,
-      },
-      end: {
-        dateTime: event.end?.dateTime || undefined,
-        date: event.end?.date || undefined,
-        timeZone: event.end?.timeZone || undefined,
-      },
+      start: DateTime.fromISO(startStr, { zone: startTz ?? undefined }),
+      end: DateTime.fromISO(endStr, { zone: endTz ?? undefined }),
+      allDay: !!(event.start?.date && !event.start?.dateTime),
     };
-
-    // Determine if it's an all-day event
-    calendarEvent.allDay = !!(event.start?.date && !event.start?.dateTime);
 
     return calendarEvent;
   }

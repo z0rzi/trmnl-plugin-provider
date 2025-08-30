@@ -1,5 +1,6 @@
 import { BasePlugin } from "../basePlugin";
 import { CalendarEvent, GoogleCalendarService } from "./GoogleCalendarService";
+import { DateTime } from "luxon";
 
 const FONT = "Courier";
 
@@ -26,6 +27,13 @@ interface CalendarConfig {
 export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   private calendarService: GoogleCalendarService | null = null;
 
+  /**
+   * Returns the current date and time in the configured timezone
+   */
+  now() {
+    return DateTime.now().setZone(this.config.timezone);
+  }
+
   async onStart(): Promise<void> {
     try {
       await this.initializeService();
@@ -46,7 +54,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     }
 
     try {
-      const { startOfWeek, endOfWeek } = this.getWeekBounds(new Date());
+      const { startOfWeek, endOfWeek } = this.getWeekBounds(this.now());
       const events = await this.calendarService.getWeekEvents(
         startOfWeek,
         endOfWeek,
@@ -84,27 +92,25 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   /**
    * Calculate week boundaries based on configuration
    */
-  private getWeekBounds(date: Date): { startOfWeek: Date; endOfWeek: Date } {
+  private getWeekBounds(date: DateTime): {
+    startOfWeek: DateTime;
+    endOfWeek: DateTime;
+  } {
     const startDay = this.config.startDay || "monday";
-    const currentDate = new Date(date);
 
     // Calculate start of week
-    const dayOfWeek = currentDate.getDay();
-    let daysToSubtract: number;
-
+    let startOfWeek: DateTime;
     if (startDay === "monday") {
-      daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      startOfWeek = date.startOf("week"); // Monday is default start of week for Luxon
     } else {
-      daysToSubtract = dayOfWeek;
+      // For Sunday start, we need to adjust
+      startOfWeek =
+        date.weekday === 7
+          ? date.startOf("day")
+          : date.startOf("week").minus({ days: 1 });
     }
 
-    const startOfWeek = new Date(currentDate);
-    startOfWeek.setDate(currentDate.getDate() - daysToSubtract);
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 7);
-    endOfWeek.setHours(0, 0, 0, 0);
+    const endOfWeek = startOfWeek.plus({ days: 7 }).startOf("day");
 
     return { startOfWeek, endOfWeek };
   }
@@ -113,7 +119,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
    * Draw the week view calendar
    */
   private async drawWeekView(
-    startOfWeek: Date,
+    startOfWeek: DateTime,
     events: CalendarEvent[],
   ): Promise<void> {
     const ctx = this.ctx;
@@ -148,22 +154,19 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     ctx.textAlign = "center";
 
     const dayNames = this.getDayNames();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Normalize to start of day
+    const today = this.now().startOf("day");
 
     for (let i = 0; i < 7; i++) {
-      const date = new Date(startOfWeek);
-      date.setDate(startOfWeek.getDate() + i);
-      date.setHours(0, 0, 0, 0); // Normalize to start of day
+      const date = startOfWeek.plus({ days: i }).startOf("day");
 
       const x = timeColumnWidth + i * dayWidth + dayWidth / 2;
       const y = 40;
 
       // Check if this is today
-      const isToday = date.getTime() === today.getTime();
+      const isToday = date.hasSame(today, "day");
 
       // Day name and date
-      const dayText = `${dayNames[i]} ${date.getMonth() + 1}/${date.getDate()}`;
+      const dayText = `${dayNames[i]} ${date.month}/${date.day}`;
       ctx.fillText(dayText, x, y);
 
       // Draw day header border
@@ -289,7 +292,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
    * Group events by day of the week
    */
   private groupEventsByDay(
-    startOfWeek: Date,
+    startOfWeek: DateTime,
     events: CalendarEvent[],
   ): CalendarEvent[][] {
     const eventsByDay: CalendarEvent[][] = Array(7)
@@ -297,7 +300,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
       .map(() => []);
 
     events.forEach((event) => {
-      const eventDate = this.getEventDate(event);
+      const eventDate = event.start;
       if (eventDate) {
         const dayIndex = this.getDayIndex(startOfWeek, eventDate);
         if (dayIndex >= 0 && dayIndex < 7) {
@@ -310,23 +313,11 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   }
 
   /**
-   * Get the date of an event (handles both dateTime and date formats)
-   */
-  private getEventDate(event: CalendarEvent): Date | null {
-    if (event.start.dateTime) {
-      return new Date(event.start.dateTime);
-    } else if (event.start.date) {
-      return new Date(event.start.date);
-    }
-    return null;
-  }
-
-  /**
    * Get the day index (0-6) for a given date within the week
    */
-  private getDayIndex(startOfWeek: Date, date: Date): number {
+  private getDayIndex(startOfWeek: DateTime, date: DateTime): number {
     const daysDiff = Math.floor(
-      (date.getTime() - startOfWeek.getTime()) / (24 * 60 * 60 * 1000),
+      date.startOf("day").diff(startOfWeek.startOf("day"), "days").days,
     );
     return daysDiff;
   }
@@ -353,7 +344,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     const timedEvents: CalendarEvent[] = [];
 
     events.forEach((event) => {
-      if (this.isAllDayEvent(event)) {
+      if (event.allDay) {
         allDayEvents.push(event);
       } else {
         timedEvents.push(event);
@@ -382,13 +373,6 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   }
 
   /**
-   * Check if an event is all-day
-   */
-  private isAllDayEvent(event: CalendarEvent): boolean {
-    return !event.start.dateTime || event.allDay === true;
-  }
-
-  /**
    * Draw all-day events in the all-day section
    */
   private drawAllDayEvents(
@@ -399,7 +383,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     allDayHeight: number,
   ): void {
     const ctx = this.ctx;
-    const eventHeight = 20;
+    const eventHeight = 29;
     const maxEvents = Math.floor(allDayHeight / eventHeight);
     const displayEvents = events.slice(0, maxEvents);
 
@@ -407,8 +391,10 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     ctx.textAlign = "left";
 
     displayEvents.forEach((event, index) => {
+      const eventDuration = event.end.diff(event.start).as('day');
+
       const eventY = headerHeight + 5 + index * eventHeight;
-      const eventWidth = dayWidth - 4;
+      const eventWidth = dayWidth * eventDuration - 4;
       const eventX = dayX + 2;
 
       // Event background (black for grayscale)
@@ -417,13 +403,14 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
 
       // Event text (white on black)
       ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${rem(1.3)}px ${FONT}`;
       const title = event.summary || "Untitled";
 
       // Handle multi-line text for all-day events
       this.drawMultiLineText(
         title,
         eventX + 4,
-        eventY + 18,
+        eventY + 20,
         eventWidth - 8,
         eventHeight - 4,
         ctx,
@@ -447,22 +434,18 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
 
     // Sort events by start time to handle overlaps better
     events.sort((a, b) => {
-      const aTime = new Date(a.start.dateTime!).getTime();
-      const bTime = new Date(b.start.dateTime!).getTime();
-      return aTime - bTime;
+      return +a - +b;
     });
 
     ctx.font = `bold ${rem(1.3)}px ${FONT}`;
     ctx.textAlign = "left";
 
     events.forEach((event) => {
-      const startTime = new Date(event.start.dateTime!);
-      const endTime = event.end?.dateTime
-        ? new Date(event.end.dateTime)
-        : new Date(startTime.getTime() + 60 * 60 * 1000); // Default 1 hour
+      const startTime = event.start;
+      const endTime = event.end;
 
-      const startMinutes = startTime.getHours() + startTime.getMinutes() / 60;
-      const endMinutes = endTime.getHours() + endTime.getMinutes() / 60;
+      const startMinutes = startTime.hour + startTime.minute / 60;
+      const endMinutes = endTime.hour + endTime.minute / 60;
 
       // Only draw if within our time range
       if (startMinutes >= startHour && startMinutes < endHour) {
@@ -486,7 +469,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
         // Event text (white on black)
         ctx.fillStyle = "#ffffff";
         const title = event.summary || "Untitled";
-        const timeStr = this.formatEventTime(event.start.dateTime!);
+        const timeStr = this.formatEventTime(event.start);
 
         // Handle multi-line text for timed events
         let textStartY = eventStartY + 24;
@@ -516,13 +499,8 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   /**
    * Format event time for display
    */
-  private formatEventTime(dateTime: string): string {
-    const date = new Date(dateTime);
-    return date.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
+  private formatEventTime(dateTime: DateTime): string {
+    return dateTime.toFormat("h:mm a");
   }
 
   /**
@@ -557,7 +535,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     ctx: any,
   ): void {
     const words = text.split(" ");
-    const lineHeight = 22; // Slightly larger than 20px font
+    const lineHeight = 22;
     let line = "";
     let currentY = y;
 
@@ -620,7 +598,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
    * Draw a horizontal line indicating the current time on today's date
    */
   private drawCurrentTimeIndicator(
-    startOfWeek: Date,
+    startOfWeek: DateTime,
     timeColumnWidth: number,
     dayWidth: number,
     timeGridStart: number,
@@ -631,18 +609,15 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     events: CalendarEvent[],
   ): void {
     const ctx = this.ctx;
-    const now = new Date();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = this.now();
+    const today = now.startOf("day");
 
     // Find which day of the week today is
     let todayDayIndex = -1;
     for (let i = 0; i < 7; i++) {
-      const date = new Date(startOfWeek);
-      date.setDate(startOfWeek.getDate() + i);
-      date.setHours(0, 0, 0, 0);
-      
-      if (date.getTime() === today.getTime()) {
+      const date = startOfWeek.plus({ days: i }).startOf("day");
+
+      if (date.hasSame(today, "day")) {
         todayDayIndex = i;
         break;
       }
@@ -654,7 +629,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     }
 
     // Get current time in hours (e.g., 14.5 for 2:30 PM)
-    const currentTimeHours = now.getHours() + now.getMinutes() / 60;
+    const currentTimeHours = now.hour + now.minute / 60;
 
     // Only draw if current time is within our display range
     if (currentTimeHours < startHour || currentTimeHours >= endHour) {
@@ -669,7 +644,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
 
     // Check if current time overlaps with any event on today
     const isOnEvent = this.isCurrentTimeOnEvent(events, now, today);
-    
+
     // Choose color based on whether we're overlapping an event
     const lineColor = isOnEvent ? "#ffffff" : "#000000";
 
@@ -702,35 +677,27 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
    */
   private isCurrentTimeOnEvent(
     events: CalendarEvent[],
-    currentTime: Date,
-    today: Date,
+    currentTime: DateTime,
+    today: DateTime,
   ): boolean {
     // Filter events that are on today
     const todaysEvents = events.filter((event) => {
-      const eventDate = this.getEventDate(event);
+      const eventDate = event.start;
       if (!eventDate) return false;
-      
-      const eventDay = new Date(eventDate);
-      eventDay.setHours(0, 0, 0, 0);
-      
-      return eventDay.getTime() === today.getTime();
+
+      return eventDate.startOf("day").hasSame(today, "day");
     });
 
     // Check if current time falls within any of today's timed events
     for (const event of todaysEvents) {
       // Skip all-day events as they don't have specific times
-      if (this.isAllDayEvent(event)) {
+      if (event.allDay) {
         continue;
       }
 
-      if (event.start.dateTime && event.end?.dateTime) {
-        const eventStart = new Date(event.start.dateTime);
-        const eventEnd = new Date(event.end.dateTime);
-
-        // Check if current time is within this event's time range
-        if (currentTime >= eventStart && currentTime <= eventEnd) {
-          return true;
-        }
+      // Check if current time is within this event's time range
+      if (currentTime >= event.start && currentTime <= event.end) {
+        return true;
       }
     }
 
