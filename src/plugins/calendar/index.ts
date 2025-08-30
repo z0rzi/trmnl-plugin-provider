@@ -153,7 +153,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     const dayNames = this.getDayNames();
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Normalize to start of day
-    
+
     for (let i = 0; i < 7; i++) {
       const date = new Date(startOfWeek);
       date.setDate(startOfWeek.getDate() + i);
@@ -178,7 +178,12 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
       if (isToday) {
         ctx.strokeStyle = textColor;
         ctx.lineWidth = 5;
-        ctx.strokeRect(timeColumnWidth + i * dayWidth + 2, 2, dayWidth - 4, headerHeight - 4);
+        ctx.strokeRect(
+          timeColumnWidth + i * dayWidth + 2,
+          2,
+          dayWidth - 4,
+          headerHeight - 4,
+        );
       }
     }
 
@@ -258,6 +263,19 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
         timeColumnWidth,
       );
     }
+
+    // Draw current time indicator line on today's date
+    this.drawCurrentTimeIndicator(
+      startOfWeek,
+      timeColumnWidth,
+      dayWidth,
+      timeGridStart,
+      hourHeight,
+      startHour,
+      endHour,
+      width,
+      events,
+    );
   }
 
   /**
@@ -331,7 +349,6 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     endHour: number,
     timeColumnWidth: number,
   ): void {
-    const ctx = this.ctx;
     const dayX = timeColumnWidth + dayIndex * dayWidth;
 
     // Separate all-day and timed events
@@ -600,6 +617,128 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
       ctx,
     );
     ctx.fillText(truncatedMessage, this.screenWidth / 2, 50);
+  }
+
+  /**
+   * Draw a horizontal line indicating the current time on today's date
+   */
+  private drawCurrentTimeIndicator(
+    startOfWeek: Date,
+    timeColumnWidth: number,
+    dayWidth: number,
+    timeGridStart: number,
+    hourHeight: number,
+    startHour: number,
+    endHour: number,
+    totalWidth: number,
+    events: CalendarEvent[],
+  ): void {
+    const ctx = this.ctx;
+    const now = new Date();
+    now.setHours(12, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find which day of the week today is
+    let todayDayIndex = -1;
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startOfWeek);
+      date.setDate(startOfWeek.getDate() + i);
+      date.setHours(0, 0, 0, 0);
+      
+      if (date.getTime() === today.getTime()) {
+        todayDayIndex = i;
+        break;
+      }
+    }
+
+    // Only draw if today is visible in this week view
+    if (todayDayIndex === -1) {
+      return;
+    }
+
+    // Get current time in hours (e.g., 14.5 for 2:30 PM)
+    const currentTimeHours = now.getHours() + now.getMinutes() / 60;
+
+    // Only draw if current time is within our display range
+    if (currentTimeHours < startHour || currentTimeHours >= endHour) {
+      return;
+    }
+
+    // Calculate Y position based on current time
+    const timeY = timeGridStart + (currentTimeHours - startHour) * hourHeight;
+
+    // Calculate X position for today's column
+    const todayColumnX = timeColumnWidth + todayDayIndex * dayWidth;
+
+    // Check if current time overlaps with any event on today
+    const isOnEvent = this.isCurrentTimeOnEvent(events, now, today);
+    
+    // Choose color based on whether we're overlapping an event
+    const lineColor = isOnEvent ? "#ffffff" : "#000000";
+
+    // Draw the current time line
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 5;
+    ctx.setLineDash([]);
+
+    // Draw line across today's column only
+    ctx.beginPath();
+    ctx.setLineDash([10, 10]);
+    ctx.moveTo(todayColumnX, timeY);
+    ctx.lineTo(todayColumnX + dayWidth, timeY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw a small circle at the start and end of the line
+    ctx.fillStyle = lineColor;
+    ctx.beginPath();
+    ctx.arc(todayColumnX, timeY, 8, 0, 2 * Math.PI);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(todayColumnX + dayWidth, timeY, 8, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  /**
+   * Check if the current time overlaps with any event on today
+   */
+  private isCurrentTimeOnEvent(
+    events: CalendarEvent[],
+    currentTime: Date,
+    today: Date,
+  ): boolean {
+    // Filter events that are on today
+    const todaysEvents = events.filter((event) => {
+      const eventDate = this.getEventDate(event);
+      if (!eventDate) return false;
+      
+      const eventDay = new Date(eventDate);
+      eventDay.setHours(0, 0, 0, 0);
+      
+      return eventDay.getTime() === today.getTime();
+    });
+
+    // Check if current time falls within any of today's timed events
+    for (const event of todaysEvents) {
+      // Skip all-day events as they don't have specific times
+      if (this.isAllDayEvent(event)) {
+        continue;
+      }
+
+      if (event.start.dateTime && event.end?.dateTime) {
+        const eventStart = new Date(event.start.dateTime);
+        const eventEnd = new Date(event.end.dateTime);
+
+        // Check if current time is within this event's time range
+        if (currentTime >= eventStart && currentTime <= eventEnd) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 }
 
