@@ -635,7 +635,6 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   ): void {
     const ctx = this.ctx;
     const now = new Date();
-    now.setHours(12, 0, 0, 0);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
