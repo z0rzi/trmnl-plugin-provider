@@ -2,6 +2,7 @@ import { Canvas, createCanvas, GlobalFonts } from "@napi-rs/canvas";
 import { Device } from "../terminus";
 import { DateTime } from "luxon";
 import path from 'path';
+import fs from 'fs';
 
 GlobalFonts.registerFromPath(
     path.join(__dirname, '../../fonts/arial.ttf'),

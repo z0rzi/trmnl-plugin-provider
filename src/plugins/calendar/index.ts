@@ -2,13 +2,15 @@ import { BasePlugin } from "../basePlugin";
 import { CalendarEvent, GoogleCalendarService } from "./GoogleCalendarService";
 import { DateTime } from "luxon";
 
-const FONT = "Courier";
-
 /**
  * Utility function to convert rem units to pixels
  */
 function rem(value: number) {
   return Math.round(value * 20);
+}
+
+function checkOverlap<T extends number | DateTime>(a: [T, T], b: [T, T]) {
+  return !(a[0] >= b[1] || a[1] <= b[0]);
 }
 
 interface CalendarConfig {
@@ -19,6 +21,22 @@ interface CalendarConfig {
   };
   timezone?: string;
   startDay?: "monday" | "sunday";
+  startHour: string;
+  endHour: string;
+}
+
+function parseHumanHour(hour: string): number {
+  if (typeof hour === "number") {
+    return hour;
+  }
+
+  hour = hour.toLowerCase();
+  if (hour.endsWith("am")) return +hour.slice(0, -2);
+  if (hour.endsWith("pm")) return +hour.slice(0, -2) + 12;
+
+  if (hour.endsWith("h00") || hour.endsWith(":00")) return +hour.slice(0, -3);
+
+  throw new Error(`Invalid hour: ${hour}`);
 }
 
 /**
@@ -26,6 +44,37 @@ interface CalendarConfig {
  */
 export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   private calendarService: GoogleCalendarService | null = null;
+
+  readonly styles = {
+    textColor: "#000000",
+    gridColor: "#cccccc",
+    eventBackgroundColor: "#000000",
+    eventTextColor: "#ffffff",
+    eventBorderColor: "#ffffff",
+
+    timeColumnWidth: 80,
+    headerHeight: 60,
+
+    fontFamily: "Courier",
+
+    headerFontSize: rem(1.4),
+    eventFontSize: rem(1.4),
+    hoursFontSize: rem(0.8),
+  };
+
+  startHour = 8;
+  endHour = 22;
+  get totalHours() {
+    return this.endHour - this.startHour;
+  }
+
+  fontStr(fontSize: number) {
+    return `bold ${fontSize}px ${this.styles.fontFamily}`;
+  }
+
+  get dayWidth() {
+    return (this.width - this.styles.timeColumnWidth) / 7;
+  }
 
   /**
    * Returns the current date and time in the configured timezone
@@ -35,6 +84,9 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   }
 
   async onStart(): Promise<void> {
+    this.startHour = parseHumanHour(this.config.startHour);
+    this.endHour = parseHumanHour(this.config.endHour);
+
     try {
       await this.initializeService();
       this.log("Calendar plugin initialized successfully", "info");
@@ -126,32 +178,51 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     const width = this.screenWidth;
     const height = this.screenHeight;
 
-    // Colors for grayscale display
-    const backgroundColor = "#ffffff";
-    const textColor = "#000000";
-    const gridColor = "#cccccc";
-
-    // Layout constants
-    const headerHeight = 60;
-    const allDayHeight = 40;
-    const timeColumnWidth = 80;
-    const dayWidth = (width - timeColumnWidth) / 7;
-    const timeGridHeight = height - headerHeight - allDayHeight;
-
-    // Time range: 8am to 10pm (14 hours)
-    const startHour = 8;
-    const endHour = 22;
-    const totalHours = endHour - startHour;
-    const hourHeight = timeGridHeight / totalHours;
-
     // Clear background
-    ctx.fillStyle = backgroundColor;
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
+
+    this.drawHeader(startOfWeek);
+    this.drawVerticalGrid();
+
+    const allDayEvents = events.filter((event) => event.allDay);
+    const allDayEventsHeight = this.drawAllDayEvents(allDayEvents);
+
+    this.drawTimeGrid(allDayEventsHeight);
+
+    // Group events by day and type
+    const eventsByDay = this.groupEventsByDay(
+      startOfWeek,
+      events.filter((e) => !e.allDay),
+    );
+
+    const timeGridStart = this.styles.headerHeight + allDayEventsHeight;
+
+    // Draw events for each day
+    for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
+      const dayX = this.styles.timeColumnWidth + dayIndex * this.dayWidth;
+      const day = startOfWeek.plus({ days: dayIndex }).startOf("day");
+      const isToday = day.hasSame(this.now(), "day");
+      this.drawTimedEvents(eventsByDay[dayIndex], dayX, timeGridStart, isToday);
+    }
+  }
+
+  /**
+   * Draws the the name and dates of each day of the week at the top of the screen
+   */
+  private drawHeader(startOfWeek: DateTime) {
+    const ctx = this.ctx;
+    const timeColumnWidth = this.styles.timeColumnWidth;
+    const dayWidth = this.dayWidth;
+    const gridColor = this.styles.gridColor;
+    const textColor = this.styles.textColor;
+    const headerHeight = this.styles.headerHeight;
 
     // Draw day headers
     ctx.fillStyle = textColor;
-    ctx.font = `bold ${rem(1.4)}px ${FONT}`;
+    ctx.font = this.fontStr(this.styles.headerFontSize);
     ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
     const dayNames = this.getDayNames();
     const today = this.now().startOf("day");
@@ -160,7 +231,7 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
       const date = startOfWeek.plus({ days: i }).startOf("day");
 
       const x = timeColumnWidth + i * dayWidth + dayWidth / 2;
-      const y = 40;
+      const y = headerHeight / 2;
 
       // Check if this is today
       const isToday = date.hasSame(today, "day");
@@ -186,26 +257,41 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
         );
       }
     }
+  }
 
-    // Draw all-day events section
-    ctx.strokeStyle = gridColor;
-    ctx.lineWidth = 1;
+  private drawVerticalGrid(): void {
+    const ctx = this.ctx;
+
+    // Draw vertical grid lines between days
+    ctx.strokeStyle = this.styles.gridColor;
+    for (let i = 1; i < 7; i++) {
+      ctx.beginPath();
+      ctx.moveTo(this.styles.timeColumnWidth + i * this.dayWidth, 0);
+      ctx.lineTo(this.styles.timeColumnWidth + i * this.dayWidth, this.height);
+      ctx.stroke();
+    }
+
+    // Draw time column border
     ctx.beginPath();
-    ctx.moveTo(0, headerHeight);
-    ctx.lineTo(width, headerHeight);
-    ctx.moveTo(0, headerHeight + allDayHeight);
-    ctx.lineTo(width, headerHeight + allDayHeight);
+    ctx.moveTo(this.styles.timeColumnWidth, 0);
+    ctx.lineTo(this.styles.timeColumnWidth, this.height);
     ctx.stroke();
+  }
 
-    // Draw time grid
+  private drawTimeGrid(allDayHeight: number): void {
+    const headerHeight = this.styles.headerHeight;
     const timeGridStart = headerHeight + allDayHeight;
+    const ctx = this.ctx;
 
     // Draw time labels and horizontal grid lines
-    ctx.font = `bold ${rem(0.8)}px ${FONT}`;
+    ctx.font = this.fontStr(this.styles.hoursFontSize);
     ctx.textAlign = "right";
 
-    for (let hour = startHour; hour <= endHour; hour++) {
-      const y = timeGridStart + (hour - startHour) * hourHeight;
+    const hourHeight =
+      (this.height - headerHeight - allDayHeight) / this.totalHours;
+
+    for (let hour = this.startHour; hour <= this.endHour; hour++) {
+      const y = timeGridStart + (hour - this.startHour) * hourHeight;
 
       // Time label
       const timeText =
@@ -216,66 +302,103 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
             : hour === 0
               ? "12:00am"
               : `${hour}:00am`;
-      ctx.fillStyle = textColor;
-      ctx.fillText(timeText, timeColumnWidth - 5, y + 4);
+
+      ctx.fillStyle = this.styles.textColor;
+      ctx.fillText(timeText, this.styles.timeColumnWidth - 5, y + 4);
 
       // Horizontal grid line (dotted)
-      ctx.strokeStyle = gridColor;
-      ctx.setLineDash([2, 3]);
+      ctx.strokeStyle = this.styles.gridColor;
+      ctx.setLineDash([10, 10]);
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(timeColumnWidth, y);
-      ctx.lineTo(width, y);
+      ctx.moveTo(this.styles.timeColumnWidth, y);
+      ctx.lineTo(this.width, y);
       ctx.stroke();
       ctx.setLineDash([]);
     }
+  }
 
-    // Draw vertical grid lines between days
-    ctx.strokeStyle = gridColor;
-    for (let i = 1; i < 7; i++) {
-      ctx.beginPath();
-      ctx.moveTo(timeColumnWidth + i * dayWidth, 0);
-      ctx.lineTo(timeColumnWidth + i * dayWidth, height);
-      ctx.stroke();
+  private drawAllDayEvents(events: CalendarEvent[]): number {
+    if (!events.length) return 0;
+
+    const lines = [] as CalendarEvent[][];
+    const remainingEvents = events.slice();
+    remainingEvents.sort((a, b) => {
+      return +a.start - +b.start;
+    });
+
+    while (remainingEvents.length) {
+      let line = [...remainingEvents];
+      for (let i = 0; i < line.length; i++) {
+        const evt = line[i];
+
+        // Checking for overlap
+        for (let j = i + 1; j < line.length; j++) {
+          const other = line[j];
+
+          if (checkOverlap([evt.start, evt.end], [other.start, other.end])) {
+            // Removing this event from the line
+            line.splice(j, 1);
+            j--;
+          }
+        }
+      }
+
+      for (const evt of line) {
+        const idx = remainingEvents.indexOf(evt);
+        if (idx !== -1) {
+          remainingEvents.splice(idx, 1);
+        }
+      }
+
+      lines.push(line);
     }
 
-    // Draw time column border
-    ctx.beginPath();
-    ctx.moveTo(timeColumnWidth, 0);
-    ctx.lineTo(timeColumnWidth, height);
-    ctx.stroke();
+    const ctx = this.ctx;
+    const eventHeight = this.styles.eventFontSize + 10;
 
-    // Group events by day and type
-    const eventsByDay = this.groupEventsByDay(startOfWeek, events);
+    const weekBounds = this.getWeekBounds(this.now());
 
-    // Draw events for each day
-    for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
-      const dayEvents = eventsByDay[dayIndex] || [];
-      this.drawTimeBasedDayEvents(
-        dayIndex,
-        dayEvents,
-        dayWidth,
-        headerHeight,
-        allDayHeight,
-        timeGridStart,
-        hourHeight,
-        startHour,
-        endHour,
-        timeColumnWidth,
-      );
+    // Now, we have the events organized in lines, and we know that
+    // within each line, there are no overlapping events.
+    // We draw the lines in order
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const top = this.styles.headerHeight + i * eventHeight;
+
+      for (const evt of line) {
+        const dow = evt.start.diff(weekBounds.startOfWeek, "days").days;
+        const duration = evt.end.diff(evt.start, "day").days;
+
+        const x = this.styles.timeColumnWidth + dow * this.dayWidth;
+        const width = duration * this.dayWidth - 10;
+
+        // Drawing the box
+        ctx.fillStyle = "#000000";
+        ctx.beginPath();
+        ctx.roundRect(x, top, width, eventHeight, 7);
+        ctx.fill();
+
+        // Drawing the border
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(x, top, width, eventHeight, 7);
+        ctx.stroke();
+
+        // Drawing the text
+        ctx.fillStyle = "#ffffff";
+        const lineHeight = rem(1.3);
+        ctx.font = this.fontStr(this.styles.eventFontSize);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+
+        const title = evt.summary || "Untitled";
+        ctx.fillText(title, x + 4, top + lineHeight / 2 + 10);
+      }
     }
 
-    // Draw current time indicator line on today's date
-    this.drawCurrentTimeIndicator(
-      startOfWeek,
-      timeColumnWidth,
-      dayWidth,
-      timeGridStart,
-      hourHeight,
-      startHour,
-      endHour,
-      width,
-      events,
-    );
+    return lines.length * eventHeight;
   }
 
   /**
@@ -322,100 +445,45 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     return daysDiff;
   }
 
-  /**
-   * Draw events for a specific day with time-based positioning
-   */
-  private drawTimeBasedDayEvents(
-    dayIndex: number,
-    events: CalendarEvent[],
-    dayWidth: number,
-    headerHeight: number,
-    allDayHeight: number,
-    timeGridStart: number,
-    hourHeight: number,
-    startHour: number,
-    endHour: number,
-    timeColumnWidth: number,
-  ): void {
-    const dayX = timeColumnWidth + dayIndex * dayWidth;
+  private processEventMultilineTitle(
+    ctx: typeof this.ctx,
+    maxWidth: number,
+    maxHeight: number,
+    title: string,
+  ): string[] {
+    const words = title.split(" ");
+    const lineHeight = rem(1.3);
+    ctx.font = this.fontStr(lineHeight);
+    let currentY = 0;
 
-    // Separate all-day and timed events
-    const allDayEvents: CalendarEvent[] = [];
-    const timedEvents: CalendarEvent[] = [];
+    let line = "";
+    let lines = [] as string[];
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      const testLine = line + (line ? " " : "") + word;
+      const metrics = ctx.measureText(testLine);
 
-    events.forEach((event) => {
-      if (event.allDay) {
-        allDayEvents.push(event);
+      if (metrics.width > maxWidth && line) {
+        // Draw the current line
+        if (currentY + lineHeight <= maxHeight) {
+          lines.push(line);
+          line = word;
+          currentY += lineHeight;
+        } else {
+          // No more space, truncate current line
+          const truncated = this.truncateText(line, maxWidth, ctx);
+          lines.push(truncated);
+          break;
+        }
       } else {
-        timedEvents.push(event);
+        line = testLine;
       }
-    });
+    }
+    if (line.length > 0) {
+      lines.push(line);
+    }
 
-    // Draw all-day events
-    this.drawAllDayEvents(
-      allDayEvents,
-      dayX,
-      headerHeight,
-      dayWidth,
-      allDayHeight,
-    );
-
-    // Draw timed events
-    this.drawTimedEvents(
-      timedEvents,
-      dayX,
-      timeGridStart,
-      dayWidth,
-      hourHeight,
-      startHour,
-      endHour,
-    );
-  }
-
-  /**
-   * Draw all-day events in the all-day section
-   */
-  private drawAllDayEvents(
-    events: CalendarEvent[],
-    dayX: number,
-    headerHeight: number,
-    dayWidth: number,
-    allDayHeight: number,
-  ): void {
-    const ctx = this.ctx;
-    const eventHeight = 29;
-    const maxEvents = Math.floor(allDayHeight / eventHeight);
-    const displayEvents = events.slice(0, maxEvents);
-
-    ctx.font = `bold ${rem(1.3)}px ${FONT}`;
-    ctx.textAlign = "left";
-
-    displayEvents.forEach((event, index) => {
-      const eventDuration = event.end.diff(event.start).as('day');
-
-      const eventY = headerHeight + 5 + index * eventHeight;
-      const eventWidth = dayWidth * eventDuration - 4;
-      const eventX = dayX + 2;
-
-      // Event background (black for grayscale)
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(eventX, eventY, eventWidth, eventHeight - 2);
-
-      // Event text (white on black)
-      ctx.fillStyle = "#ffffff";
-      ctx.font = `bold ${rem(1.3)}px ${FONT}`;
-      const title = event.summary || "Untitled";
-
-      // Handle multi-line text for all-day events
-      this.drawMultiLineText(
-        title,
-        eventX + 4,
-        eventY + 20,
-        eventWidth - 8,
-        eventHeight - 4,
-        ctx,
-      );
-    });
+    return lines;
   }
 
   /**
@@ -425,82 +493,263 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     events: CalendarEvent[],
     dayX: number,
     timeGridStart: number,
-    dayWidth: number,
-    hourHeight: number,
-    startHour: number,
-    endHour: number,
+    drawCurrentTime = false,
   ): void {
     const ctx = this.ctx;
+    const sectionHeight = this.height - timeGridStart;
+    const hourHeight = sectionHeight / this.totalHours;
+    const dayWidth = this.dayWidth;
 
     // Sort events by start time to handle overlaps better
     events.sort((a, b) => {
-      return +a - +b;
+      return +a.start - +b.start;
     });
 
-    ctx.font = `bold ${rem(1.3)}px ${FONT}`;
+    // Filtering out events outside of the time range
+    events = events.filter((evt) => {
+      return evt.end.hour > this.startHour && evt.start.hour < this.endHour;
+    });
+
+    ctx.font = this.fontStr(this.styles.eventFontSize);
     ctx.textAlign = "left";
 
-    events.forEach((event) => {
-      const startTime = event.start;
-      const endTime = event.end;
+    /**
+     * Value used to know how much space at the top of the event
+     * we should keep visible
+     */
+    const titleHeight = 40;
 
-      const startMinutes = startTime.hour + startTime.minute / 60;
-      const endMinutes = endTime.hour + endTime.minute / 60;
-
-      // Only draw if within our time range
-      if (startMinutes >= startHour && startMinutes < endHour) {
-        const eventStartY =
-          timeGridStart + (startMinutes - startHour) * hourHeight;
-        const duration = Math.max(0.5, endMinutes - startMinutes); // Minimum 30 minutes
-        const eventHeight = Math.min(duration * hourHeight, hourHeight * 2); // Cap at 2 hours height
-
-        const eventWidth = dayWidth - 4;
-        const eventX = dayX + 2;
-
-        // Event background (black for grayscale)
-        ctx.fillStyle = "#000000";
-        ctx.fillRect(eventX, eventStartY, eventWidth, eventHeight);
-
-        // Event border
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(eventX, eventStartY, eventWidth, eventHeight);
-
-        // Event text (white on black)
-        ctx.fillStyle = "#ffffff";
-        const title = event.summary || "Untitled";
-        const timeStr = this.formatEventTime(event.start);
-
-        // Handle multi-line text for timed events
-        let textStartY = eventStartY + 24;
-        const availableHeight = eventHeight - 8;
-
-        // Draw time first if there's enough space
-        if (eventHeight > 50) {
-          ctx.font = `bold ${rem(0.8)}px ${FONT}`;
-          ctx.fillText(timeStr, eventX + 4, eventStartY + 18);
-          textStartY = eventStartY + 40;
-          ctx.font = `bold ${rem(1.3)}px ${FONT}`;
-        }
-
-        // Draw title with multi-line support
-        this.drawMultiLineText(
-          title,
-          eventX + 4,
-          textStartY,
-          eventWidth - 8,
-          availableHeight - (textStartY - eventStartY),
-          ctx,
-        );
+    const evts = events.map((evt) => {
+      let start = evt.start;
+      let end = evt.end;
+      if (start.hour < this.startHour) {
+        start = start.set({ hour: this.startHour - 1, minute: 55 });
       }
-    });
-  }
+      if (end.hour > this.endHour) {
+        end = end.set({ hour: this.endHour, minute: 5 });
+      }
 
-  /**
-   * Format event time for display
-   */
-  private formatEventTime(dateTime: DateTime): string {
-    return dateTime.toFormat("h:mm a");
+      const durationMs = +end - +start;
+      const durationHours = durationMs / 1000 / 60 / 60;
+
+      const top =
+        timeGridStart +
+        (start.hour + start.minute / 60 - this.startHour) * hourHeight;
+
+      return {
+        evt,
+        top,
+        height: hourHeight * durationHours,
+        bottom: top + hourHeight * durationHours,
+      };
+    });
+
+    const placedEvents = [] as [number, (typeof evts)[0]][];
+
+    for (const event of evts) {
+      // Does this event collide with any of the already placed events?
+      const collidingEvents = placedEvents.filter(([x, evt]) => {
+        return checkOverlap([event.top, event.bottom], [evt.top, evt.bottom]);
+      });
+
+      // sorting the collision by x
+      collidingEvents.sort((a, b) => b[0] - a[0]);
+
+      // Looking for a way to go behind the events
+      let foundSpot = false;
+      const maxX = Math.max(...placedEvents.map(([x]) => x));
+      for (let x = 0; x < maxX; x++) {
+        // Is there an event at this position?
+        const collidingEvent = collidingEvents.find(
+          ([evtX]) => evtX >= x && evtX < x + 1,
+        );
+        if (!collidingEvent) {
+          // No event at this position, we can place this event
+          placedEvents.push([x, event]);
+          foundSpot = true;
+          break;
+        }
+      }
+      if (foundSpot) continue;
+
+      const highestCollidingEvent = collidingEvents[0];
+
+      if (!highestCollidingEvent) {
+        // No collision, we can place this event
+        placedEvents.push([0, event]);
+        continue;
+      }
+
+      // We check if we're colliding with the title or not
+      if (event.top < highestCollidingEvent[1].top + titleHeight) {
+        // We collide with the title
+        placedEvents.push([highestCollidingEvent[0] + 1, event]);
+      } else {
+        // We collide but not with the title!
+        placedEvents.push([highestCollidingEvent[0] + 0.2, event]);
+      }
+    }
+
+    const maxX = Math.max(...placedEvents.map(([x]) => x)) + 1;
+
+    // Calculating the bbox of each event
+    const bboxes = [] as {
+      top: number;
+      left: number;
+      bottom: number;
+      width: number;
+      height: number;
+      title: string[];
+    }[];
+    // Sorting the events by x position
+    placedEvents.sort((a, b) => a[0] - b[0]);
+    for (const [x, evt] of placedEvents) {
+      // If there is someone colliding with the title AFTER this event,
+      // we extend this event until the collision point
+      //
+      // Otherwise:
+      //   If there is someone colliding with the title BEFORE this event,
+      //     We extend until end of width - 10px
+      //   Otherwise:
+      //     We extend until end of width
+      const collidingEventsAfter = [] as [number, (typeof evts)[0]][];
+      const collidingEventsBefore = [] as [number, (typeof evts)[0]][];
+
+      for (const [_x, _evt] of placedEvents) {
+        if (_evt === evt) continue;
+        // We check if the title collides with another event
+        const doesCollide = checkOverlap(
+          [evt.top, Math.min(evt.bottom, evt.top + titleHeight)],
+          [_evt.top, _evt.bottom],
+        );
+
+        if (!doesCollide) continue;
+
+        if (_x < x) {
+          collidingEventsBefore.push([_x, _evt]);
+        } else {
+          collidingEventsAfter.push([_x, _evt]);
+        }
+      }
+
+      const xOffset = (x / maxX) * dayWidth;
+      const left = dayX + 2 + xOffset;
+
+      if (!collidingEventsAfter.length) {
+        // No collisions at all, the event takes the whole width
+        bboxes.push({
+          top: evt.top,
+          left,
+          bottom: evt.bottom,
+          width: dayWidth - xOffset - 4,
+          height: evt.height,
+          title: this.processEventMultilineTitle(
+            ctx,
+            dayWidth,
+            evt.height,
+            evt.evt.summary || "Untitled",
+          ),
+        });
+        continue;
+      }
+
+      if (collidingEventsAfter.length) {
+        // There are collisions after this event, we extend until the start of the collision
+        // We look for the collision with the smallest X
+        const collision = collidingEventsAfter.reduce((a, b) => {
+          return a[0] < b[0] ? a : b;
+        });
+        const collisionX = collision[0];
+
+        const right = dayX + 2 + (collisionX / maxX) * dayWidth;
+        const width = right - left;
+
+        bboxes.push({
+          top: evt.top,
+          bottom: evt.bottom,
+          height: evt.height,
+          left,
+          width,
+          title: this.processEventMultilineTitle(
+            ctx,
+            dayWidth,
+            evt.height,
+            evt.evt.summary || "Untitled",
+          ),
+        });
+      }
+    }
+
+    const radius = 7;
+
+    // Drawing the events
+    for (const bbox of bboxes) {
+      // Event background (black for grayscale)
+      ctx.fillStyle = "#000000";
+      ctx.beginPath();
+      ctx.roundRect(bbox.left, bbox.top, bbox.width, bbox.height, radius);
+      ctx.fill();
+      // ctx.fillRect(bbox.left, bbox.top, bbox.width, bbox.height);
+
+      // Event border
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(bbox.left, bbox.top, bbox.width, bbox.height, radius);
+      ctx.stroke();
+
+      // Event text (white on black)
+      ctx.fillStyle = "#ffffff";
+      const lineHeight = rem(1.3);
+      ctx.font = this.fontStr(this.styles.eventFontSize);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+
+      const titleLines = bbox.title;
+      for (let i = 0; i < titleLines.length; i++) {
+        const titleLine = titleLines[i];
+        const y = bbox.top + i * lineHeight;
+        ctx.fillText(titleLine, bbox.left + 4, y + lineHeight / 2 + 10);
+      }
+    }
+
+    // Draw the current time line
+    const now = this.now();
+    const canDrawNowBar = now.hour > this.startHour && now.hour < this.endHour;
+    if (drawCurrentTime && canDrawNowBar) {
+      const timeY =
+        timeGridStart +
+        (now.hour + now.minute / 60 - this.startHour) * hourHeight;
+
+      // Draw line across today's column only
+      ctx.setLineDash([10, 10]);
+      ctx.lineWidth = 5;
+
+      // White dashed line
+      ctx.beginPath();
+      ctx.moveTo(dayX, timeY);
+      ctx.lineTo(dayX + dayWidth, timeY);
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+
+      // Black dashed line
+      ctx.beginPath();
+      ctx.moveTo(dayX + 10, timeY);
+      ctx.lineTo(dayX + dayWidth, timeY);
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+
+      // Draw a small circle at the start and end of the line
+      ctx.fillStyle = "#000000";
+      ctx.beginPath();
+      ctx.arc(dayX, timeY, 8, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(dayX + dayWidth, timeY, 8, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   }
 
   /**
@@ -524,53 +773,6 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
   }
 
   /**
-   * Draw multi-line text with word wrapping
-   */
-  private drawMultiLineText(
-    text: string,
-    x: number,
-    y: number,
-    maxWidth: number,
-    maxHeight: number,
-    ctx: any,
-  ): void {
-    const words = text.split(" ");
-    const lineHeight = 22;
-    let line = "";
-    let currentY = y;
-
-    for (let i = 0; i < words.length; i++) {
-      const testLine = line + (line ? " " : "") + words[i];
-      const metrics = ctx.measureText(testLine);
-
-      if (metrics.width > maxWidth && line) {
-        // Draw the current line
-        if (currentY - y + lineHeight <= maxHeight) {
-          ctx.fillText(line, x, currentY);
-          line = words[i];
-          currentY += lineHeight;
-        } else {
-          // No more space, truncate current line
-          const truncated = this.truncateText(line, maxWidth, ctx);
-          ctx.fillText(truncated, x, currentY);
-          break;
-        }
-      } else {
-        line = testLine;
-      }
-    }
-
-    // Draw the last line if there's space
-    if (line && currentY - y + lineHeight <= maxHeight) {
-      const finalText =
-        ctx.measureText(line).width > maxWidth
-          ? this.truncateText(line, maxWidth, ctx)
-          : line;
-      ctx.fillText(finalText, x, currentY);
-    }
-  }
-
-  /**
    * Draw a screen with an error message in its center.
    * Handy when you want to show an error message to the end user.
    */
@@ -581,127 +783,17 @@ export class CalendarPlugin extends BasePlugin<CalendarConfig> {
     ctx.fillRect(10, 10, this.screenWidth - 20, 50);
 
     ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${rem(1.2)}px ${FONT}`;
+    ctx.font = this.fontStr(this.styles.eventFontSize);
     ctx.textAlign = "center";
     ctx.fillText("Calendar Error", this.screenWidth / 2, 30);
 
-    ctx.font = `bold ${rem(0.8)}px ${FONT}`;
+    ctx.font = this.fontStr(this.styles.hoursFontSize);
     const truncatedMessage = this.truncateText(
       message,
       this.screenWidth - 40,
       ctx,
     );
     ctx.fillText(truncatedMessage, this.screenWidth / 2, 50);
-  }
-
-  /**
-   * Draw a horizontal line indicating the current time on today's date
-   */
-  private drawCurrentTimeIndicator(
-    startOfWeek: DateTime,
-    timeColumnWidth: number,
-    dayWidth: number,
-    timeGridStart: number,
-    hourHeight: number,
-    startHour: number,
-    endHour: number,
-    totalWidth: number,
-    events: CalendarEvent[],
-  ): void {
-    const ctx = this.ctx;
-    const now = this.now();
-    const today = now.startOf("day");
-
-    // Find which day of the week today is
-    let todayDayIndex = -1;
-    for (let i = 0; i < 7; i++) {
-      const date = startOfWeek.plus({ days: i }).startOf("day");
-
-      if (date.hasSame(today, "day")) {
-        todayDayIndex = i;
-        break;
-      }
-    }
-
-    // Only draw if today is visible in this week view
-    if (todayDayIndex === -1) {
-      return;
-    }
-
-    // Get current time in hours (e.g., 14.5 for 2:30 PM)
-    const currentTimeHours = now.hour + now.minute / 60;
-
-    // Only draw if current time is within our display range
-    if (currentTimeHours < startHour || currentTimeHours >= endHour) {
-      return;
-    }
-
-    // Calculate Y position based on current time
-    const timeY = timeGridStart + (currentTimeHours - startHour) * hourHeight;
-
-    // Calculate X position for today's column
-    const todayColumnX = timeColumnWidth + todayDayIndex * dayWidth;
-
-    // Check if current time overlaps with any event on today
-    const isOnEvent = this.isCurrentTimeOnEvent(events, now, today);
-
-    // Choose color based on whether we're overlapping an event
-    const lineColor = isOnEvent ? "#ffffff" : "#000000";
-
-    // Draw the current time line
-    ctx.strokeStyle = lineColor;
-    ctx.lineWidth = 5;
-    ctx.setLineDash([]);
-
-    // Draw line across today's column only
-    ctx.beginPath();
-    ctx.setLineDash([10, 10]);
-    ctx.moveTo(todayColumnX, timeY);
-    ctx.lineTo(todayColumnX + dayWidth, timeY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Draw a small circle at the start and end of the line
-    ctx.fillStyle = lineColor;
-    ctx.beginPath();
-    ctx.arc(todayColumnX, timeY, 8, 0, 2 * Math.PI);
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(todayColumnX + dayWidth, timeY, 8, 0, 2 * Math.PI);
-    ctx.fill();
-  }
-
-  /**
-   * Check if the current time overlaps with any event on today
-   */
-  private isCurrentTimeOnEvent(
-    events: CalendarEvent[],
-    currentTime: DateTime,
-    today: DateTime,
-  ): boolean {
-    // Filter events that are on today
-    const todaysEvents = events.filter((event) => {
-      const eventDate = event.start;
-      if (!eventDate) return false;
-
-      return eventDate.startOf("day").hasSame(today, "day");
-    });
-
-    // Check if current time falls within any of today's timed events
-    for (const event of todaysEvents) {
-      // Skip all-day events as they don't have specific times
-      if (event.allDay) {
-        continue;
-      }
-
-      // Check if current time is within this event's time range
-      if (currentTime >= event.start && currentTime <= event.end) {
-        return true;
-      }
-    }
-
-    return false;
   }
 }
 

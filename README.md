@@ -73,7 +73,6 @@ docker run -d --name trmnl-plugin-provider trmnl-plugin-provider
 
 - Ensure your `.env` file is present in the project root before building
 - The container uses Bun runtime for optimal performance
-- Plugin data and databases are persisted via the `./dbs` volume mount
 - The container runs with restart policy `always` for production deployments
 
 ### Docker Environment
@@ -83,7 +82,6 @@ The Docker setup:
 - Copies fonts, source code, and environment configuration
 - Automatically installs dependencies during build
 - Runs the application with `bun src/index.ts`
-- Mounts `./dbs` directory for persistent plugin data
 
 ## Plugin System
 

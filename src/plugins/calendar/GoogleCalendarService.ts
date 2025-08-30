@@ -179,7 +179,6 @@ export class GoogleCalendarService {
     const endTz = event.end?.timeZone;
 
     if (!startStr || !endStr) {
-      console.log('🐱', event);
       throw new Error("Invalid event start or end date");
     }
 
@@ -216,46 +215,6 @@ export class GoogleCalendarService {
     } catch (error) {
       console.error("Google Calendar connection test failed:", error);
       return false;
-    }
-  }
-
-  /**
-   * Get information for all configured calendars
-   * @returns Promise resolving to array of calendar metadata
-   */
-  async getCalendarsInfo(): Promise<
-    Array<{
-      id: string;
-      summary: string;
-      timeZone?: string;
-    }>
-  > {
-    if (!this.calendar) {
-      throw new Error("Google Calendar API client not initialized");
-    }
-
-    try {
-      const calendarsInfo = [];
-
-      for (const calendarId of this.calendarIds) {
-        try {
-          const response = await this.calendar.calendars.get({
-            calendarId: calendarId,
-          });
-
-          calendarsInfo.push({
-            id: response.data.id || "",
-            summary: response.data.summary || "",
-            timeZone: response.data.timeZone || undefined,
-          });
-        } catch (error) {
-          console.warn(`Failed to get info for calendar ${calendarId}:`, error);
-        }
-      }
-
-      return calendarsInfo;
-    } catch (error) {
-      throw new Error(`Failed to get calendars info: ${error}`);
     }
   }
 }
