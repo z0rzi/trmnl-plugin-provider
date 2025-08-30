@@ -11,6 +11,8 @@
       ]
     },
     "timezone": "Europe/Paris",
-    "startDay": "monday"
+    "startDay": "monday",
+    "startHour": "9:00",
+    "endHour": "21:00"
   }
 }
