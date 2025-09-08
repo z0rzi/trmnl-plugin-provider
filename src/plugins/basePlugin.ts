@@ -31,7 +31,6 @@ export abstract class BasePlugin<TConfig = any> {
     public readonly height: number,
     public readonly config: TConfig,
     public readonly deviceInfo: Device,
-    public readonly refreshRateMinutes: number,
   ) {
     if (new.target === BasePlugin) {
       throw new Error(

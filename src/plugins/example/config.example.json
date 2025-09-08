@@ -1,6 +1,5 @@
 {
   "enabled": true,
-  "refreshRateMinutes": 5,
   "config": {
     "config1": "value1",
     "config2": 42

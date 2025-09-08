@@ -129,7 +129,6 @@ export default WeatherPlugin;
 ```json
 {
   "enabled": true,
-  "refreshRateMinutes": 15,
   "config": {
     "apiKey": "your-api-key",
     "location": "New York, NY"
@@ -140,8 +139,9 @@ export default WeatherPlugin;
 ### Configuration Options
 
 - `enabled`: Whether the plugin should run
-- `refreshRateMinutes`: How often to refresh the display (minimum 1 minute)
 - `config`: Plugin-specific configuration object
+
+**Note**: Plugin refresh is now synchronized with your device's refresh schedule. All plugins refresh automatically 1 minute before the device is scheduled to refresh, ensuring optimal coordination.
 
 ### Available Plugins
 
@@ -165,7 +165,6 @@ A basic template plugin for development reference.
 - `pluginName`: Plugin identifier
 - `config`: Plugin configuration object
 - `deviceInfo`: TRMNL device information
-- `refreshRateMinutes`: Update frequency
 
 ### Methods
 - `draw()`: Abstract method for rendering content (implement in your plugin)

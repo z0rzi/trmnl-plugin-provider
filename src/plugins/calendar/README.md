@@ -62,7 +62,6 @@ Update the `config.json` file in the calendar plugin directory:
 ```json
 {
   "enabled": true,
-  "refreshRateMinutes": 15,
   "config": {
     "googleCalendar": {
       "serviceAccountKeyPath": "/path/to/your/service-account-key.json",
@@ -110,7 +109,7 @@ The plugin will:
 - Fetch events from all configured calendars for the current week
 - Merge events from multiple calendars and sort by time
 - Display them in a grid layout with 7 columns (one per day)
-- Refresh automatically based on the `refreshRateMinutes` setting
+- Refresh automatically synchronized with your device's refresh schedule
 - Show error messages if any calendar API calls fail (other calendars will continue to work)
 
 ## Troubleshooting
@@ -136,7 +135,7 @@ The plugin will:
 
 ### "API quota exceeded" Error
 - Google Calendar API has usage limits
-- Consider increasing the `refreshRateMinutes` to reduce API calls
+- Plugin refreshes are now synchronized with device refresh - consider adjusting your device's refresh rate to reduce API calls
 - Check your Google Cloud Console for quota usage
 - Reduce the number of calendars if hitting limits
 

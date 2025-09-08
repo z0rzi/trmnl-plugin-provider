@@ -1,6 +1,5 @@
 {
   "enabled": true,
-  "refreshRateMinutes": 1,
 
   "config": {
     "googleCalendar": {

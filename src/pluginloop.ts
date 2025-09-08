@@ -15,9 +15,15 @@ function parseJson<T = unknown>(json: string, errorMessage: string): T {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default class PluginLoop {
   plugins: BasePlugin[] = [];
   device: Device | null = null;
+
+  private running = false;
 
   private markDeviceAsIdentified: (() => void) | undefined;
   private devicesIdentified = new Promise<void>((resolve) => {
@@ -72,7 +78,6 @@ export default class PluginLoop {
 
       const pluginConfig = parseJson<{
         enabled: boolean;
-        refreshRateMinutes: number;
         config: unknown;
       }>(
         fs.readFileSync(pluginConfigPath, "utf8"),
@@ -88,20 +93,6 @@ export default class PluginLoop {
       if (pluginConfig.enabled === false) {
         console.log(`Plugin ${pluginName} is disabled in config.json`);
         continue;
-      }
-
-      if (!("refreshRateMinutes" in pluginConfig)) {
-        throw new Error(
-          `Plugin ${pluginName} config.json is missing the 'refreshRateMinutes' property`,
-        );
-      }
-
-      if (isNaN(pluginConfig.refreshRateMinutes)) {
-        `Plugin ${pluginName} refreshRateMinutes is not a number`;
-      }
-
-      if (pluginConfig.refreshRateMinutes < 1) {
-        `Plugin ${pluginName} refreshRateMinutes should be more than 1 minute`;
       }
 
       if (!("config" in pluginConfig)) {
@@ -125,7 +116,6 @@ export default class PluginLoop {
           this.device.height,
           pluginConfig.config,
           this.device,
-          +pluginConfig.refreshRateMinutes
         ),
       );
     }
@@ -140,7 +130,7 @@ export default class PluginLoop {
     // Removing the old screen
     const screens = await Terminus.getScreens();
 
-    const screenPrefix = plugin.pluginName + '_' + this.device.friendly_id;
+    const screenPrefix = plugin.pluginName + "_" + this.device.friendly_id;
 
     for (const screen of screens) {
       if (screen.name.startsWith(screenPrefix)) {
@@ -148,14 +138,14 @@ export default class PluginLoop {
       }
     }
 
-    const screenName = screenPrefix + '_' + Date.now().toString(36)
+    const screenName = screenPrefix + "_" + Date.now().toString(36);
 
     // Adding the new screen
     const id = await Terminus.addScreen(
       b64,
       screenName,
       screenName,
-      screenName + '.png',
+      screenName + ".png",
       this.device.model_id,
     );
 
@@ -168,19 +158,99 @@ export default class PluginLoop {
   async start() {
     await this.devicesIdentified;
 
+    // Initialize all plugins
     for (const plugin of this.plugins) {
       await plugin.onStart();
       plugin.log("Plugin started", "info");
+    }
 
-      const refreshRateMinutes = plugin.refreshRateMinutes;
+    // Initial refresh of all plugins
+    await this.refreshAllPlugins();
 
-      this.refreshScreenForPlugin(plugin);
-      setInterval(
-        async () => {
-          this.refreshScreenForPlugin(plugin);
-        },
-        refreshRateMinutes * 60 * 1000,
-      );
+    // Start the device-synchronized refresh loop
+    this.startDeviceSynchronizedLoop();
+  }
+
+  private async refreshAllPlugins() {
+    console.log("Refreshing all active plugins...");
+
+    for (const plugin of this.plugins) {
+      try {
+        await this.refreshScreenForPlugin(plugin);
+      } catch (error) {
+        console.error(`Failed to refresh plugin ${plugin.pluginName}:`, error);
+      }
+    }
+  }
+
+  private async startDeviceSynchronizedLoop() {
+    if (this.running) {
+      throw new Error("Device synchronized loop is already running");
+    }
+
+    this.running = true;
+
+    const oneMinute = 60 * 1000; // 1 minute in milliseconds
+
+    const CHECK_OFFSET = oneMinute;
+    const CHECK_INTERVAL = 10 * oneMinute;
+
+    let expectingDeviceRefreshOnNextCheck = false;
+    let lastDeviceUpdateTime = 0;
+
+    while (true) {
+      // Get fresh device information
+      const device = await Terminus.getDevice(1);
+
+      if (lastDeviceUpdateTime === 0) {
+        lastDeviceUpdateTime = Date.parse(device.updated_at);
+      }
+
+      // Validate device refresh rate
+      if (device.refresh_rate < 60) {
+        throw new Error(
+          `Device refresh rate (${device.refresh_rate}s) is less than 60 seconds - not supported`,
+        );
+      }
+
+      const deviceRefreshRate = device.refresh_rate * 1000; // Convert to milliseconds
+      const deviceUpdatedAt = Date.parse(device.updated_at);
+      const deviceShouldUpdateAt = deviceUpdatedAt + deviceRefreshRate;
+
+      const now = Date.now();
+
+      if (deviceUpdatedAt !== lastDeviceUpdateTime) {
+        // Device was refreshed
+        if (expectingDeviceRefreshOnNextCheck) {
+          console.log(
+            `Device refreshed as planned, at ${new Date(deviceUpdatedAt).toISOString()}`,
+          );
+          expectingDeviceRefreshOnNextCheck = false;
+        } else {
+          console.log(
+            `Unexpected device refresh at ${new Date(deviceUpdatedAt).toISOString()}`,
+          );
+          // Refreshing screens. In case the user triggered a refresh, maybe they will do it again...
+          this.refreshAllPlugins();
+        }
+        await sleep(CHECK_INTERVAL);
+      } else if (
+        now + CHECK_OFFSET <= deviceShouldUpdateAt &&
+        deviceShouldUpdateAt <= now + CHECK_INTERVAL + CHECK_OFFSET
+      ) {
+        const timeBeforeUpdate = deviceShouldUpdateAt - now;
+        console.log(
+          `Device refresh approaching (in ${(timeBeforeUpdate / 1000 / 60).toFixed(2)} minutes) - refreshing all plugins`,
+        );
+        this.refreshAllPlugins();
+
+        // We sleep until right after the update
+        await sleep(deviceShouldUpdateAt - now + oneMinute);
+        expectingDeviceRefreshOnNextCheck = true;
+      } else {
+        console.log(`Sleeping for ${CHECK_INTERVAL / 1000 / 60} minutes...`);
+        await sleep(CHECK_INTERVAL);
+      }
     }
   }
 }
