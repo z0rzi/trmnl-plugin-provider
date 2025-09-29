@@ -217,6 +217,44 @@ export async function getDevice(deviceId: number): Promise<Device> {
 }
 
 /**
+ * Update one or more attributes of a device.
+ * 
+ * @param deviceId - The ID of the device to update
+ * @param updates - An object with device properties to update (e.g. { refresh_rate: 250 })
+ * @returns Promise resolving to the updated Device object
+ */
+export async function updateDevice(
+  deviceId: number,
+  updates: Partial<
+    Pick<
+      Device,
+      | "label"
+      | "playlist_id"
+      | "firmware_beta"
+      | "refresh_rate"
+      | "image_timeout"
+      | "proxy"
+      | "firmware_update"
+      | "sleep_start_at"
+      | "sleep_stop_at"
+    >
+  >
+): Promise<Device> {
+  try {
+    const payload = { device: updates };
+    const response: AxiosResponse<{ data: Device }> = await apiClient.patch(
+      `/api/devices/${deviceId}`,
+      payload
+    );
+    return response.data.data;
+  } catch (error) {
+    throw new Error(
+      `Failed to update device ${deviceId}: ${error}`
+    );
+  }
+}
+
+/**
  * Get model information by model ID
  * @param modelId - Model ID to retrieve
  * @returns Promise resolving to model data

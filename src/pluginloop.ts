@@ -164,9 +164,6 @@ export default class PluginLoop {
       plugin.log("Plugin started", "info");
     }
 
-    // Initial refresh of all plugins
-    await this.refreshAllPlugins();
-
     // Start the device-synchronized refresh loop
     this.startDeviceSynchronizedLoop();
   }
@@ -183,6 +180,71 @@ export default class PluginLoop {
     }
   }
 
+  /**
+   * Waits for the device to be connected to the server, and to refresh.
+   * Guarantees that the device will refresh in at least 20 seconds, and at most 60 seconds after the promise resolves.
+   *
+   * @returns Promise<number> The time when the device will refresh next
+   */
+  private async waitForDeviceRefresh(): Promise<number> {
+    const device = await Terminus.getDevice(1);
+    const initialRefreshRate = device.refresh_rate * 1000;
+    const lastDeviceUpdateTime = Date.parse(device.updated_at);
+
+    async function onSigInt() {
+      // Restore the initial refresh rate
+      await Terminus.updateDevice(1, {
+        refresh_rate: initialRefreshRate / 1000,
+      });
+      process.exit();
+    }
+
+    process.on("SIGINT", onSigInt);
+
+    const timeBeforeNextRefresh =
+      lastDeviceUpdateTime + initialRefreshRate - Date.now();
+    console.log(
+      `Expecting device to refresh in ${(timeBeforeNextRefresh / 1000 / 60).toFixed(2)} minutes`,
+    );
+
+    // After the next refresh, the device will refresh every 60 seconds.
+    // We do this because we need 2 consecutive refreshes to be able to properly refresh the plugins in time:
+    // 1st refresh: Confirmation that the device is back online
+    // 2nd refresh: Refreshing the plugins
+    await Terminus.updateDevice(1, { refresh_rate: 60 });
+
+    return new Promise<number>((resolve, reject) => {
+      const interval = setInterval(async () => {
+        const device = await Terminus.getDevice(1);
+        let _lastDeviceUpdateTime = Date.parse(device.updated_at);
+
+        if (_lastDeviceUpdateTime === lastDeviceUpdateTime) {
+          // The device did not refresh
+          return;
+        }
+
+        // Ok, the device refreshed!
+        let nextRefreshTime = _lastDeviceUpdateTime + 60_000;
+        if (nextRefreshTime < Date.now() + 20_000) {
+          // We have less than 10 seconds before the next refresh, we wait for it to happen
+          await sleep(25_000);
+          const device = await Terminus.getDevice(1);
+          _lastDeviceUpdateTime = Date.parse(device.updated_at);
+          nextRefreshTime = _lastDeviceUpdateTime + 60_000;
+        }
+        // Now, we should have at least 10 seconds before the next refresh
+
+        // Restauring the initial refresh rate
+        await Terminus.updateDevice(1, { refresh_rate: initialRefreshRate / 1000 });
+
+        process.off("SIGINT", onSigInt);
+
+        clearInterval(interval);
+        resolve(nextRefreshTime);
+      }, 60_000);
+    });
+  }
+
   private async startDeviceSynchronizedLoop() {
     if (this.running) {
       throw new Error("Device synchronized loop is already running");
@@ -192,64 +254,42 @@ export default class PluginLoop {
 
     const oneMinute = 60 * 1000; // 1 minute in milliseconds
 
-    const CHECK_OFFSET = oneMinute;
-    const CHECK_INTERVAL = 10 * oneMinute;
-
-    let expectingDeviceRefreshOnNextCheck = false;
-    let lastDeviceUpdateTime = 0;
+    console.log("Waiting for device to refresh...");
+    const nextRefreshTime = await this.waitForDeviceRefresh();
+    console.log("Device refreshed, we can start the loop!");
+    await this.refreshAllPlugins();
+    await sleep(nextRefreshTime - Date.now() + oneMinute);
 
     while (true) {
       // Get fresh device information
       const device = await Terminus.getDevice(1);
-
-      if (lastDeviceUpdateTime === 0) {
-        lastDeviceUpdateTime = Date.parse(device.updated_at);
-      }
-
-      // Validate device refresh rate
-      if (device.refresh_rate < 60) {
-        throw new Error(
-          `Device refresh rate (${device.refresh_rate}s) is less than 60 seconds - not supported`,
-        );
-      }
-
-      const deviceRefreshRate = device.refresh_rate * 1000; // Convert to milliseconds
+      const refreshRate = device.refresh_rate * 1000; // Convert to milliseconds
       const deviceUpdatedAt = Date.parse(device.updated_at);
-      const deviceShouldUpdateAt = deviceUpdatedAt + deviceRefreshRate;
+      const deviceShouldUpdateAt = deviceUpdatedAt + refreshRate;
 
-      const now = Date.now();
+      const timeToWait = deviceShouldUpdateAt - Date.now() - oneMinute;
 
-      if (deviceUpdatedAt !== lastDeviceUpdateTime) {
-        // Device was refreshed
-        if (expectingDeviceRefreshOnNextCheck) {
-          console.log(
-            `Device refreshed as planned, at ${new Date(deviceUpdatedAt).toISOString()}`,
-          );
-          expectingDeviceRefreshOnNextCheck = false;
-        } else {
-          console.log(
-            `Unexpected device refresh at ${new Date(deviceUpdatedAt).toISOString()}`,
-          );
-          // Refreshing screens. In case the user triggered a refresh, maybe they will do it again...
-          this.refreshAllPlugins();
-        }
-        await sleep(CHECK_INTERVAL);
-      } else if (
-        now + CHECK_OFFSET <= deviceShouldUpdateAt &&
-        deviceShouldUpdateAt <= now + CHECK_INTERVAL + CHECK_OFFSET
-      ) {
-        const timeBeforeUpdate = deviceShouldUpdateAt - now;
+      console.log(`Waiting ${(timeToWait / 1000 / 60).toFixed(2)} minutes...`);
+      await sleep(timeToWait);
+
+      // Device should update in 60 seconds. We refresh all plugins
+      this.refreshAllPlugins();
+
+      await sleep(oneMinute);
+
+      // Device should have refreshed, we check if it actually did
+      let _device = await Terminus.getDevice(1);
+      const _deviceUpdatedAt = Date.parse(_device.updated_at);
+
+      if (_deviceUpdatedAt === deviceUpdatedAt) {
+        // The device did not refresh... This is probably because it's disconnected from the server.
         console.log(
-          `Device refresh approaching (in ${(timeBeforeUpdate / 1000 / 60).toFixed(2)} minutes) - refreshing all plugins`,
+          "Device disconnected from the server, waiting for it to reconnect...",
         );
-        this.refreshAllPlugins();
-
-        // We sleep until right after the update
-        await sleep(deviceShouldUpdateAt - now + oneMinute);
-        expectingDeviceRefreshOnNextCheck = true;
-      } else {
-        console.log(`Sleeping for ${CHECK_INTERVAL / 1000 / 60} minutes...`);
-        await sleep(CHECK_INTERVAL);
+        const nextRefreshTime = await this.waitForDeviceRefresh();
+        console.log("Device back online, we can start the loop!");
+        await this.refreshAllPlugins();
+        await sleep(nextRefreshTime - Date.now() + oneMinute);
       }
     }
   }
